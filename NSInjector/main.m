@@ -138,7 +138,7 @@ static NSString *SWF(id Value, ...) {
 
  
 void Usage(void) {
-    printf(BGRN"\n\nUsage: NSInjector <command>\n\n  -d      dylib path [Optional]\n  -b      bundle path [Optional]\n  -a      ipa path [Required]\n  -p      profile path [Required]\n  -i      just type -i at the end to install ipa after signing [Optional]\n\n  Ex.1 : NSInjector -d /path/to/dylib -b /path/to/bundle -a /path/to/ipa -p /path/to/profile\n  Ex.2 : NSInjector -d /path/to/dylib,/path/to/dylib2,/path/to/dylib3 -b /path/to/bundle -a /path/to/ipa -p /path/to/profile\n  Ex.3 : NSInjector -d /path/to/dylib,/path/to/dylib2,/path/to/dylib3 -b /path/to/bundle,/path/to/bundle2,/path/to/bundle3 -a /path/to/ipa -p /path/to/profile -i \n \n\n  By : @CrazyMind90\n\n\n"reset);
+    printf(BGRN"\n\nUsage: NSInjector <command>\n\n  -d      dylib path [Optional]\n  -b      bundle path [Optional]\n  -a      ipa path [Required]\n  -p      profile path [Required if you didn't use -f]\n  -f      Fake sign with ent.plist/.xml path [Required if you didn't use -p]\n  -i      just type -i at the end to install ipa after signing [Optional]\n\n  Ex.1 : NSInjector -d /path/to/dylib -b /path/to/bundle -a /path/to/ipa -p /path/to/profile\n  Ex.2 : NSInjector -d /path/to/dylib,/path/to/dylib2,/path/to/dylib3 -b /path/to/bundle -a /path/to/ipa -p /path/to/profile\n  Ex.3 : NSInjector -d /path/to/dylib,/path/to/dylib2,/path/to/dylib3 -b /path/to/bundle,/path/to/bundle2,/path/to/bundle3 -a /path/to/ipa -p /path/to/profile -i \n \n\n  By : @CrazyMind90\n\n\n"reset);
 }
 
 NSString *GetFullCertNameFromKeyChainWithCertID(NSString *Cert) {
@@ -159,12 +159,76 @@ NSString *FixSS(NSString *Str) {
     return [Str stringByReplacingOccurrencesOfString:@" " withString:@"\\ "];
 }
 
- 
-int main(int argc, const char * argv[]) {
-    @autoreleasepool {
+BOOL is_binary(NSString *file) {
+    
+    FILE *f = fopen(file.UTF8String, "r");
+    if (!f)
+    return NO;
+    
+    int c = 0;
+    while ((c=fgetc(f)) != EOF) {
+    if ((!isascii(c) || iscntrl(c)) && !isspace(c)) {
+    fclose(f);
+    return YES;
+    }
+    }
+    
+    fclose(f);
+    return NO;
+}
 
+BOOL isDirectory(NSString *Path) {
+    BOOL Directory = NO;
+    if ([[NSFileManager defaultManager] fileExistsAtPath:Path isDirectory:&Directory] && Directory)
+        Directory = YES;
+    
+    return Directory;
+}
+
+
+
+ 
+
+NSMutableArray *GetAllBinaries(NSString *AppFolder) {
+    
+    NSMutableArray *Directories = [NSMutableArray new];
+    NSMutableArray *Binaries = [NSMutableArray new];
+    
+    NSArray *Content = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:AppFolder error:nil];
+    
+    for (NSString *EachFile in Content)
+        [Directories addObject:SWF(@"%@%@",AppFolder,EachFile)];
+    
+    if (Directories.count <= 0)
+        return NULL;
+    
+    for (int counter = 0; counter < Directories.count; counter ++) {
+        NSString *AppFolder = Directories[counter];
+        NSArray *Content = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:AppFolder error:nil];
+        for (NSString *EachFile in Content) {
+            [Directories addObject:SWF(@"%@/%@",AppFolder,EachFile)];
+        }
+    }
+    
+    for (NSString *EachPath in Directories) {
+        if ([EachPath.pathExtension isEqual:@""] || [EachPath.pathExtension isEqual:@"dylib"]) {
+            if (is_binary(SWF(@"%@",EachPath)))
+                [Binaries addObject:EachPath];
+        }
+         
+        
+    }
+    
+    return Binaries;
+}
+
+int main(int argc, const char * argv[]) {
+    
+    @autoreleasepool {
+        
     setuid(0);
         
+  
     NSString *args;
     for (int counter = 1; counter < argc; counter ++) {
     if (counter == 1)
@@ -174,7 +238,7 @@ int main(int argc, const char * argv[]) {
     }
 
    
-    if (![args containsString:@"-a"] || ![args containsString:@"-p"]) {
+    if ((![args containsString:@"-a"] || ![args containsString:@"-p"]) && ![args containsString:@"-f"]) {
         Usage();
         return 0;
     }
@@ -187,6 +251,7 @@ int main(int argc, const char * argv[]) {
     BOOL isMultiDylib = NO;
     BOOL isMultiBundle = NO;
     BOOL installToiDevice = NO;
+    BOOL isFakeSign = NO;
     NSArray *Dylibs;
     NSArray *Bundles;
         
@@ -199,10 +264,20 @@ int main(int argc, const char * argv[]) {
     if ([args containsString:@"-i"])
     installToiDevice = YES;
         
+    if ([args containsString:@"-f"])
+    isFakeSign = YES;
+        
     NSString *DylibPath = GetFromString(@"-d", @" -", args);
     NSString *BundlePath = GetFromString(@"-b", @" -", args);
     NSString *iPAPath = GetFromString(@"-a", @" -", args);
-    NSString *ProfilePath = GetFromString(@"-p", @" -", args);
+    NSString *ProfilePath;
+    NSString *FakeProfile;
+        
+    if (isFakeSign)
+    FakeProfile = GetFromString(@"-f", @" -", args);
+    else
+    ProfilePath = GetFromString(@"-p", @" -", args);
+
  
 #pragma CheckOptool
     if (![[NSFileManager defaultManager] fileExistsAtPath:Optool]) {
@@ -277,10 +352,17 @@ int main(int argc, const char * argv[]) {
  
         
 #pragma CheckProfile
-   if (![[NSFileManager defaultManager] fileExistsAtPath:ProfilePath]) {
-   printf(BRED"Profile not found\n"reset);
-   return 0;
-   }
+    if (isFakeSign) {
+    if (![[NSFileManager defaultManager] fileExistsAtPath:FakeProfile]) {
+    printf(BRED"Ent file not found\n"reset);
+    return 0;
+    }
+    } else {
+    if (![[NSFileManager defaultManager] fileExistsAtPath:ProfilePath]) {
+    printf(BRED"Profile not found\n"reset);
+    return 0;
+    }
+    }
         
         
 #pragma UnzippingiPA
@@ -326,6 +408,7 @@ int main(int argc, const char * argv[]) {
     
     [[NSFileManager defaultManager] removeItemAtPath:SWF(@"%@/PlugIns",AppPath) error:nil];
     CMD(SWF(@"rm -rf %@/*.mobileprovision",FixSS(AppPath)));
+    if (!FakeProfile)
     [[NSFileManager defaultManager] copyItemAtPath:ProfilePath toPath:SWF(@"%@/embedded.mobileprovision",AppPath) error:nil];
         
 #pragma Setting_Info.plist
@@ -364,28 +447,47 @@ int main(int argc, const char * argv[]) {
 
 #pragma SettingUp_Entitlements
         
+    NSString *CertName;
+    if (!FakeProfile) {
     printf(BYEL"[+] Preparing profile ..\n"reset);
     CMD(SWF(@"security cms -D -i %@ > %@/ent.xml",FixSS(ProfilePath),FixSS(WorkingPath)));
     NSString *OwnerName = [NSMutableDictionary dictionaryWithContentsOfFile:SWF(@"%@/ent.xml",WorkingPath)][@"TeamIdentifier"][0];
-    NSString *CertName = GetFullCertNameFromKeyChainWithCertID(OwnerName);
+    CertName = GetFullCertNameFromKeyChainWithCertID(OwnerName);
     if (!CertName) {
     printf(BRED"Could not find a valid certificate in keychain\n"reset);
     return 0;
     }
     CMD(SWF(@"/usr/libexec/PlistBuddy -x -c 'Print:Entitlements' %@/ent.xml > %@/ent.plist",FixSS(WorkingPath),FixSS(WorkingPath)));
-
+    }
  
-#pragma Signing
+    if ((!CertName || [CertName isEqual:[NSNull null]]) && !isFakeSign) {
+    printf(BRED"Could not find certificate in keychain\n"reset);
+    return 0;
+    }
+
     sleep(1.5);
     printf(BYEL"[+] Signing ..\n"reset);
     printf(BGRN"\n"reset);
-    CMD(SWF(@"codesign -f -s \"%@\" --entitlements %@/ent.plist %@/Frameworks/*",CertName,FixSS(WorkingPath),FixSS(AppPath)));
-    CMD(SWF(@"codesign -f -s \"%@\" --entitlements %@/ent.plist %@/Frameworks/*/*",CertName,FixSS(WorkingPath),FixSS(AppPath)));
-    CMD(SWF(@"codesign -f -s \"%@\" --entitlements %@/ent.plist %@/Frameworks/*.dylib",CertName,WorkingPath,FixSS(AppPath)));
-    CMD(SWF(@"codesign -f -s \"%@\" --entitlements %@/ent.plist %@/*/*.dylib",CertName,FixSS(WorkingPath),FixSS(AppPath)));
-    CMD(SWF(@"codesign -f -s \"%@\" --entitlements %@/ent.plist %@/*.dylib",CertName,FixSS(WorkingPath),FixSS(AppPath)));
-    CMD(SWF(@"codesign -f -s \"%@\" --entitlements %@/ent.plist %@/%@",CertName,FixSS(WorkingPath),FixSS(AppPath),ExcutableBinary));
-            
+        
+#pragma Collecting binaries
+    NSMutableArray *Binaries = GetAllBinaries(SWF(@"%@/",AppPath));
+    if (Binaries.count <= 0) {
+    printf("Could not find any binary !");
+    return 0;
+    }
+        
+#pragma Signing
+    if (!FakeProfile) {
+    for (NSString *EachBinaryPath in Binaries) {
+    CMD(SWF(@"codesign -f -s \"%@\" --entitlements %@/ent.plist %@",CertName,FixSS(WorkingPath),FixSS(EachBinaryPath)));
+    }
+    CMD(SWF(@"codesign -f -s \"%@\" --entitlements %@/ent.plist %@",CertName,FixSS(WorkingPath),FixSS(AppPath)));
+    } else {
+    for (NSString *EachBinaryPath in Binaries) {
+    CMD(SWF(@"ldid -S%@ %@",FixSS(FakeProfile),FixSS(EachBinaryPath)));
+    }
+    }
+        
 #pragma Zip_iPA
     NSString *SignediPA = SWF(@"%@/%@_Signed.ipa",WorkingPath,ExcutableBinary);
     [SSZipArchive createZipFileAtPath:SignediPA withContentsOfDirectory:Payload keepParentDirectory:true];
